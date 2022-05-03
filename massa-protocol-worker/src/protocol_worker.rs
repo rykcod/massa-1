@@ -1007,7 +1007,7 @@ impl ProtocolWorker {
         // Perform general checks on the operations, note them into caches and send them to pool
         // but do not propagate as they are already propagating within a block
         let (seen_ops, received_operations_ids, has_duplicate_operations, total_gas) = self
-            .note_operations_from_node(operations.clone(), source_node_id, false)
+            .note_operations_from_node(operations.clone(), source_node_id, false, None)
             .await?;
         if total_gas > self.max_block_gas {
             // Gas usage over limit => block invalid
@@ -1085,13 +1085,14 @@ impl ProtocolWorker {
         operations: Operations,
         source_node_id: &NodeId,
         propagate: bool,
+        _serialized: Option<Vec<Vec<u8>>>,
     ) -> Result<(Vec<OperationId>, Map<OperationId, (usize, u64)>, bool, u64), ProtocolError> {
         massa_trace!("protocol.protocol_worker.note_operations_from_node", { "node": source_node_id, "operations": operations });
         let mut total_gas = 0u64;
         let length = operations.len();
         let mut has_duplicate_operations = false;
         let mut seen_ops = vec![];
-        let mut new_operations = Map::with_capacity_and_hasher(length, BuildMap::default());
+        let mut new_operations = Set::with_capacity_and_hasher(length, BuildMap::default());
         let mut received_ids = Map::with_capacity_and_hasher(length, BuildMap::default());
         for (idx, operation) in operations.into_iter().enumerate() {
             let operation_id = operation.content.compute_id()?;
@@ -1114,7 +1115,7 @@ impl ProtocolWorker {
             if self.checked_operations.insert(operation_id) {
                 // check signature
                 operation.verify_signature(&operation.content.sender_public_key)?;
-                new_operations.insert(operation_id, operation);
+                new_operations.insert(operation_id);
             };
         }
 
@@ -1316,9 +1317,14 @@ impl ProtocolWorker {
                 }
                 self.update_ask_block(block_ask_timer).await?;
             }
-            NetworkEvent::ReceivedOperations { node, operations } => {
+            NetworkEvent::ReceivedOperations {
+                node,
+                operations,
+                serialized,
+            } => {
                 massa_trace!("protocol.protocol_worker.on_network_event.received_operations", { "node": node, "operations": operations});
-                self.on_operations_received(node, operations).await;
+                self.on_operations_received(node, operations, serialized)
+                    .await;
             }
             NetworkEvent::ReceivedEndorsements { node, endorsements } => {
                 massa_trace!("protocol.protocol_worker.on_network_event.received_endorsements", { "node": node, "endorsements": endorsements});
